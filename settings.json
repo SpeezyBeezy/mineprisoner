@@ -1,0 +1,8 @@
+{
+  "host": "changez_me_to_the_server_address",
+  "port": 25565,
+  "username": "change_me_to_the_desired_username_for_the_bot",
+  "version": "1.21.1",
+  "auth": false,
+  "password": ""
+}
