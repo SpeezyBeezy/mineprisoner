@@ -1,21 +1,38 @@
-const mineflayer = require('mineflayer');
-const fs = require('fs');
+import mineflayer from 'mineflayer';
+import fs from 'fs/promises'; // Use promise-based fs for ESM
+import path from 'path';
 
 // --- SETUP & CONFIG ---
 const args = process.argv.slice(2);
 const registerFlag = args.includes('-r') || args.includes('--register');
-let settings = JSON.parse(fs.readFileSync('settings.json', 'utf8'));
 
-if (registerFlag) {
-    // Generate 8-character alphanumeric password
-    const newPass = Math.random().toString(36).slice(-8);
-    settings.password = newPass;
-    settings.auth = true;
-    fs.writeFileSync('settings.json', JSON.stringify(settings, null, 2));
-    console.log(`[AUTH] Registering new account with password: ${newPass}`);
+// Helper to read/write JSON in ESM
+async function getSettings() {
+    const data = await fs.readFile('./settings.json', 'utf8');
+    return JSON.parse(data);
 }
 
-function createBot() {
+async function saveSettings(settings) {
+    await fs.writeFile('./settings.json', JSON.stringify(settings, null, 2));
+}
+
+async function createBot() {
+    let settings;
+    try {
+        settings = await getSettings();
+    } catch (err) {
+        console.error("Could not read settings.json. Make sure it exists!");
+        process.exit(1);
+    }
+
+    if (registerFlag) {
+        const newPass = Math.random().toString(36).slice(-8);
+        settings.password = newPass;
+        settings.auth = true;
+        await saveSettings(settings);
+        console.log(`[AUTH] Registering new account with password: ${newPass}`);
+    }
+
     const bot = mineflayer.createBot({
         host: settings.host,
         port: settings.port,
@@ -28,7 +45,6 @@ function createBot() {
 
     // --- UTILITIES ---
 
-    // Human-like smooth looking
     async function smoothLook(yaw, pitch) {
         const steps = 15;
         const startYaw = bot.entity.yaw;
@@ -42,13 +58,13 @@ function createBot() {
         }
     }
 
-    function sendLoreMessage() {
+    async function sendLoreMessage() {
         try {
-            const messages = JSON.parse(fs.readFileSync('messages.json', 'utf8'));
+            const data = await fs.readFile('./messages.json', 'utf8');
+            const messages = JSON.parse(data);
             const msg = messages[Math.floor(Math.random() * messages.length)];
             bot.chat(msg);
             
-            // Jittered 15-minute timer (15 mins +/- 2 mins)
             const jitter = (Math.random() * 240000) - 120000;
             const nextInterval = (15 * 60 * 1000) + jitter;
             setTimeout(sendLoreMessage, nextInterval);
@@ -61,8 +77,7 @@ function createBot() {
 
     async function startPrisonLife() {
         while (true) {
-            // PHASE A: ACTIVE (approx 5 mins)
-            console.log("[STATE] Entering Active Phase (Pacing/Mining)");
+            console.log("[STATE] Entering Active Phase");
             const activeEndTime = Date.now() + 5 * 60 * 1000;
             
             while (Date.now() < activeEndTime) {
@@ -73,11 +88,9 @@ function createBot() {
                 }
             }
 
-            // PHASE B: AFK (approx 5-10 mins)
             console.log("[STATE] Entering AFK Phase");
             bot.clearControlStates();
             isMoving = false;
-            // Look down slightly like someone tabbed out
             await smoothLook(bot.entity.yaw, -0.5);
             
             const afkTime = (5 + Math.random() * 5) * 60 * 1000;
@@ -87,7 +100,6 @@ function createBot() {
 
     async function humanMovement() {
         isMoving = true;
-        // 95% W, but mix in ASD
         const keys = ['forward', 'back', 'left', 'right'];
         const weights = [0.90, 0.02, 0.04, 0.04];
         
@@ -103,9 +115,7 @@ function createBot() {
         bot.setControlState(key, true);
         bot.setControlState('jump', Math.random() > 0.8);
         bot.setControlState('sprint', Math.random() > 0.5);
-        bot.setControlState('sneak', Math.random() > 0.9);
 
-        // Look around while moving
         const targetYaw = bot.entity.yaw + (Math.random() - 0.5) * 2;
         const targetPitch = (Math.random() - 0.5) * 0.5;
         await smoothLook(targetYaw, targetPitch);
@@ -119,15 +129,11 @@ function createBot() {
         const block = bot.findBlock({ matching: (b) => b.name === 'bedrock', maxDistance: 4 });
         if (block) {
             await bot.lookAt(block.position.offset(0.5, 0.5, 0.5));
-            console.log("[ACTION] Desperation mining bedrock...");
-            
-            // Start digging for ~1 minute
             const stopMining = Date.now() + 60000;
             while (Date.now() < stopMining) {
                 try {
                     await bot.dig(block, true);
                 } catch (e) {
-                    // Bedrock can't be broken, error is expected
                     await bot.waitForTicks(10);
                 }
             }
@@ -146,26 +152,19 @@ function createBot() {
                     bot.chat(`/login ${settings.password}`);
                 }
             }
-            
-            // Start the lore timer (Initial msg after 6s)
             setTimeout(sendLoreMessage, 6000);
-            // Start the movement cycles
             startPrisonLife();
         }, 3000);
     });
 
-    // Wall detection: if moving but not changing position
     setInterval(() => {
         if (!isMoving || !bot.entity) return;
-        
         const currentPos = bot.entity.position;
         if (lastPos && currentPos.distanceTo(lastPos) < 0.2) {
-            // Stuck! Back away and turn
             bot.clearControlStates();
             bot.setControlState('back', true);
             setTimeout(async () => {
                 bot.setControlState('back', false);
-                // Turn roughly 180 degrees (PI radians)
                 const turn = bot.entity.yaw + Math.PI + (Math.random() - 0.5);
                 await smoothLook(turn, 0);
             }, 800);
@@ -173,11 +172,9 @@ function createBot() {
         lastPos = currentPos.clone();
     }, 2000);
 
-    bot.on('death', () => bot.chat("..."));
-    bot.on('kicked', (reason) => console.log("Kicked:", reason));
     bot.on('error', (err) => console.log("Error:", err));
     bot.on('end', () => {
-        console.log("Disconnected. Reconnecting in 10s...");
+        console.log("Disconnected. Reconnecting...");
         setTimeout(createBot, 10000);
     });
 }
